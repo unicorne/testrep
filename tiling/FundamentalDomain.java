@@ -1,5 +1,6 @@
 package tiler.tiling;
 
+import javafx.collections.ObservableFloatArray;
 import javafx.geometry.Point2D;
 import javafx.geometry.Point3D;
 import javafx.scene.AmbientLight;
@@ -25,12 +26,11 @@ import tiler.core.dsymbols.Geometry;
 import tiler.core.fundamental.utils.WrapInt;
 import tiler.core.fundamental.utils.Gaps;
 
-import tiler.core.fundamental.tools.Line3D;
-
 import java.util.Arrays;
 import java.util.BitSet;
 import java.util.Comparator;
 import java.util.Random;
+import java.util.concurrent.SynchronousQueue;
 import java.util.List;
 import java.util.ArrayList;
 
@@ -58,6 +58,9 @@ public class FundamentalDomain {
 
 		final BitSet set = new BitSet();
 		final BitSet visit = new BitSet(fDomain.size());
+		final BitSet visitLines = new BitSet(fDomain.size());
+		final BitSet visitEdges = new BitSet(fDomain.size());
+
 		final Random random = new Random(666);
 		// set colors
 		for (int a = 1; a <= dsymbol.size(); a = dsymbol.nextOrbit(0, 1, a, set)) {
@@ -70,52 +73,22 @@ public class FundamentalDomain {
 			});
 		}
 
-		// For lines
-		float[][] pointsmatrix; // saves points for mesh drawing for each fDomain
-		Point3D[][] points3dmatrix; // saves point3ds for mesh drawing for each fDomain
-		int[][] linepointsmatrix;// saves the position of points that are on a line that needs to be drawn
-		double linesize = 2;
-		double edgesize = 2;
-		int edgefine = 8; // defines how smooth the edges are
+		// For lines and edges
+		double linesize = 3;
+		double edgesize = 3;
+		int edgefine = 24; // defines how smooth the edges are
 		final Color linecolor = Color.WHITE;
-		final Color lineedgecolor = Color.BLACK;
 		final Color edgecolor = Color.WHITE;
-		double linesAbove = 0.5; // defines the height of the line above the faces
+		double linesAbove; // defines the height of the line above the faces
+		
 		// Booleans
 		boolean drawFaces = true;
 		boolean drawLines = true;
 		boolean drawEdges = true;
-		boolean drawPoints = false; // draws points on 2 line
-
-		boolean drawLinesWithEdges = false; // Attempt to draw lines with edges
-
-		boolean drawEucledianEdges = true; // draws edges with circles
-		boolean drawEucledianEdgesSphere = false; // draws edges with sphere objects
-
-		boolean drawSphericalEdges = true;
-		boolean drawSphericalEdgesFine = false; // more edges less performance
-		boolean drawSphericalEdgeSphere = false;
-		boolean drawSphericalEdgesFineSphere = false;
-
-		boolean drawHyperbolicEdges = false;
-		boolean drawHyperbolicEdgesFine = true;
-		boolean drawHyperbolicEdgesSphere = false;
-		boolean drawHyperbolicEdgesSphereFine = false;
-
-		boolean HyperbolicAccurateLineSize = false; // hyperbolic linesize is adjusted
+	
 
 		// defines length of the matrix
 		Geometry geom = fDomain.getGeometry();
-		if (geom == Geometry.Spherical) {
-			points3dmatrix = new Point3D[fDomain.size()][1026]; // number of points that create each spherical fDomain
-			linepointsmatrix = new int[fDomain.size()][33]; // number of points on the line that needs to be drawn
-		} else if (geom == Geometry.Euclidean) {
-			points3dmatrix = new Point3D[fDomain.size()][7];
-			linepointsmatrix = new int[fDomain.size()][3];
-		} else {
-			points3dmatrix = new Point3D[fDomain.size()][13];
-			linepointsmatrix = new int[fDomain.size()][9];
-		}
 
 		// construct triangles as meshes:
 
@@ -125,6 +98,8 @@ public class FundamentalDomain {
 		for (int a = 1; a <= fDomain.size(); a++) {
 			final float[] points;
 			final Point3D[] points3d; // points that create the triangles
+			final Point3D[] linepoints3d;
+			final Point3D[] edgepoints3d;
 
 			final int[] faces;
 			final int[] fac;
@@ -172,11 +147,17 @@ public class FundamentalDomain {
 
 						if (this.depth > 0) {
 							int midAB = p.incrementInt();
-							points3d[midAB] = Tools.midpoint3D(geom, points3d[pointA], points3d[pointB]);
+							points3d[midAB] = Tools.sphericalMidpoint(points3d[pointA], points3d[pointB]); // Tools.midpoint3D(geom,
+																											// points3d[pointA],
+																											// points3d[pointB]);
 							int midAC = p.incrementInt();
-							points3d[midAC] = Tools.midpoint3D(geom, points3d[pointA], points3d[pointC]);
+							points3d[midAC] = Tools.sphericalMidpoint(points3d[pointA], points3d[pointC]); // Tools.midpoint3D(geom,
+																											// points3d[pointA],
+																											// points3d[pointC]);
 							int midBC = p.incrementInt();
-							points3d[midBC] = Tools.midpoint3D(geom, points3d[pointB], points3d[pointC]);
+							points3d[midBC] = Tools.sphericalMidpoint(points3d[pointB], points3d[pointC]);// Tools.midpoint3D(geom,
+																											// points3d[pointB],
+																											// points3d[pointC]);
 
 							this.tri1 = new triangle(this.orientationUp, this.pointA, midAB, midAC, --this.depth);
 							this.tri2 = new triangle(this.orientationUp, midAB, this.pointB, midBC, this.depth);
@@ -205,115 +186,72 @@ public class FundamentalDomain {
 				new triangle(true, 4, 2, 3, depth);
 				new triangle(false, 4, 3, 5, depth);
 
-				int[] pointsOf2Edge = { 0, 1, 5, 7, 10, 13, 16, 22, 43, 46, 52, 136, 139, 142, 148, 169, 172, 178, 262,
-						265, 268, 271, 277, 298, 301, 307, 391, 394, 397, 403, 424, 427, 433 }; // getPositionArray(bolArray);
-
-				int[] pointsOf2EdgeSorted = { 0, 16, 13, 22, 10, 46, 43, 52, 7, 142, 139, 148, 136, 172, 169, 178, 5,
-						271, 268, 277, 265, 301, 298, 307, 262, 397, 394, 403, 391, 427, 424, 433, 1 };
-
-				linepoints = pointsOf2EdgeSorted;
-				// double[][] linepointsdistance = new double[1026][2];
-				// double[][] linepointsdistance2 = new double[1026][2];
+				//// original structure to get points on 2-line
+				// int[] pointsOf2Edge = { 0, 1, 5, 7, 10, 13, 16, 22, 43, 46, 52, 136, 139,
+				// 142, 148, 169, 172, 178, 262,
+				// 265, 268, 271, 277, 298, 301, 307, 391, 394, 397, 403, 424, 427, 433 }; //
+				// getPositionArray(bolArray);
 				//
-				// double[][] linepointsdistance3 ={{0.0, 0.0},
-				// {1.0, 9.219244256272484},
-				// {5.0, 4.609622128136366},
-				// {7.0, 2.3048110640685406},
-				// {10.0, 1.1524055320345405},
-				// {13.0, 0.5762027660157822},
-				// {16.0, 0.288101383005441},
-				// {22.0, 0.8643041490261935},
-				// {43.0, 1.72860829805166},
-				// {46.0, 1.4405069150418683},
-				// {52.0, 2.016709681059741},
-				// {136.0, 3.457216596102366},
-				// {139.0, 2.8810138300846284},
-				// {142.0, 2.592912447077225},
-				// {148.0, 3.169115213094037},
-				// {169.0, 4.033419362120038},
-				// {172.0, 3.7453179791108875},
-				// {178.0, 4.321520745127799},
-				// {262.0, 6.9144331922046876},
-				// {265.0, 5.762027660170338},
-				// {268.0, 5.185824894153019},
-				// {271.0, 4.897723511145091},
-				// {277.0, 5.473926277162035},
-				// {298.0, 6.338230426187096},
-				// {301.0, 6.050129043179344},
-				// {307.0, 6.626331809196125},
-				// {391.0, 8.06683872423854},
-				// {394.0, 7.4906359582212065},
-				// {397.0, 7.2025345752132095},
-				// {403.0, 7.778737341230291},
-				// {424.0, 8.643041490255458},
-				// {427.0, 8.354940107246374},
-				// {433.0, 8.931142873264196}};
+				// int[] pointsOf2EdgeSorted = { 0, 16, 13, 22, 10, 46, 43, 52, 7, 142, 139,
+				// 148, 136, 172, 169, 178, 5,
+				// 271, 268, 277, 265, 301, 298, 307, 262, 397, 394, 403, 391, 427, 424, 433, 1
+				// };
 				//
+				// Point3D[] linepoints3d2 = new Point3D[pointsOf2EdgeSorted.length];
 				//
-				// for(int i=0;i<33;i++) {
-				// linepointsdistance[i][0] = positions2[i];
-				// linepointsdistance[i][1] =
-				// sphericalDistance(points3d[0],points3d[positions2[i]],100);
+				// for (int i = 0; i < pointsOf2EdgeSorted.length; i++) {
+				// linepoints3d2[i] = points3d[pointsOf2EdgeSorted[i]];
 				// }
-				//
-				// for(int i = 0;i<33;i++) {
-				// System.out.println("" + Arrays.toString(linepointsdistance3[i]));
-				// }
-				//
-				// linepointsdistance3 = sort2DArrayBasedOnSecondColumn(linepointsdistance3);
-				//
-				// for(int i = 0;i<33;i++) {
-				// System.out.println("sorted" + Arrays.toString(linepointsdistance3[i]));
-				// }
-				//
 
-				// outsource
-				linepointsmatrix[a - 1] = linepoints;
-				points3dmatrix[a - 1] = points3d;
+				///// gets points on line with interpolation
+				// combines two arrays from 0 to 5 point and 5 to 1 point on 2-line
+				
+				int n = (int) Math.pow(2, depth + 1) / 2; //number of line elements for a line from 0 to 5 or 5 to 1 point
+				Point3D[] linepoints3d0to5 = new Point3D[n + 1];
+				Point3D[] linepoints3d5to1 = new Point3D[n + 1];
 
-				// tries to get points
-				if (false) {
+				//start and end points for the line
+				Point3D start1 = points3d[0];
+				Point3D end1 = points3d[5];
+				Point3D start2 = points3d[5];
+				Point3D end2 = points3d[1];
+				
+				linepoints3d0to5[0] = start1;
+				linepoints3d0to5[n] = end1;
+				linepoints3d5to1[0] = start2;
+				linepoints3d5to1[n] = end2;
 
-					int[] BooleanPoints = new int[1026];
-					Point3D start = points3d[0];
-					Point3D end = points3d[1];
-					double startenddist = start.distance(end);
-					double dist11 = start.distance(points3d[5]);
-					double dist22 = end.distance(points3d[5]);
-					double dist33 = dist11 + dist22;
-					double diff = Math.abs(dist33 - startenddist);
-					BooleanPoints[1] = 1;
-					BooleanPoints[0] = 1;
+				double h = 1.0 / n; //length of one line segment in % 
 
-					for (int i = 2; i < 1026; i++) {
-						double dist1 = start.distance(points3d[i]);
-						double dist2 = end.distance(points3d[i]);
-						double dist3 = dist1 + dist2;
+		
+				//finds interpolated points on line
+				for (int i = 1; i < n; i++) {
+					double pos = h * i;
+					linepoints3d0to5[i] = Tools.interpolateSpherePoints(start2, end2, pos);
+					linepoints3d5to1[i] = Tools.interpolateSpherePoints(start1, end1, pos);
+				}
 
-						if (Math.abs(startenddist - dist3) <= diff) {
-							BooleanPoints[i] = 1;
-						} else {
-							BooleanPoints[i] = 0;
-						}
-					}
-					int counter = 0;
-					for (int i = 0; i < 1026; i++) {
-						if (BooleanPoints[i] == 1) {
-							counter++;
-						}
-					}
+				// combines the two arrays because only one line is drawn for each domain element
+				int size = linepoints3d0to5.length + linepoints3d5to1.length;
+				Point3D[] array = new Point3D[size];
+				for (int i = 0; i < linepoints3d0to5.length; i++) {
+					array[i] = linepoints3d0to5[i];
+				}
+				for (int i = 0; i < linepoints3d5to1.length; i++) {
+					array[i + linepoints3d0to5.length] = linepoints3d5to1[i];
+				}
+				
+				linepoints3d = array;
 
-					// System.out.println("counter: " + counter);
-					int[] positions = new int[counter];
-					int j = 0;
-					for (int i = 0; i < 1026; i++) {
-						if (BooleanPoints[i] == 1) {
-							positions[j] = i;
-							j++;
-						}
-					}
-					// System.out.println(Arrays.toString(positions));
-
+				// sets points for edges
+				edgepoints3d = new Point3D[3];
+				edgepoints3d[0] = points3d[0];
+				edgepoints3d[1] = points3d[5];
+				edgepoints3d[2] = points3d[1];
+				
+				//scales the points on sphere to reduce rendering problems
+				for(int i=0;i<points3d.length;i++) {
+					points3d[i] = points3d[i].multiply(0.995);
 				}
 
 			} else if (geom == Geometry.Euclidean) {
@@ -354,11 +292,14 @@ public class FundamentalDomain {
 
 				fac = original;
 
-				// outsource
-				int[] positions = { 0, 5, 1 };
-				linepoints = positions;
-				points3dmatrix[a - 1] = points3d;
-				linepointsmatrix[a - 1] = linepoints;
+				// sets points for line
+				linepoints3d = new Point3D[3];
+				linepoints3d[0] = points3d[0];
+				linepoints3d[1] = points3d[5];
+				linepoints3d[2] = points3d[1];
+				edgepoints3d = linepoints3d;
+				
+				
 
 			} else {
 
@@ -400,11 +341,24 @@ public class FundamentalDomain {
 
 				fac = hyper;
 
-				// outsource
+				// sets points for line
 				int[] pointsOf2EdgeSorted = { 0, 9, 7, 10, 5, 11, 8, 12, 1 };
-				linepoints = pointsOf2EdgeSorted;
-				points3dmatrix[a - 1] = points3d;
-				linepointsmatrix[a - 1] = linepoints;
+				linepoints3d = new Point3D[9];
+				for (int i = 0; i < 9; i++) {
+					linepoints3d[i] = points3d[pointsOf2EdgeSorted[i]];
+				}
+
+				// sets points for edges
+				edgepoints3d = new Point3D[3];
+				edgepoints3d[0] = points3d[0];
+				edgepoints3d[1] = points3d[5];
+				edgepoints3d[2] = points3d[1];
+				
+				
+				//scales points to reduce rendering problems
+				for(int i=0;i<points3d.length;i++) {
+					points3d[i] = points3d[i].multiply(1.0125);
+				}
 
 			} // end of geometric cases
 
@@ -427,10 +381,6 @@ public class FundamentalDomain {
 
 			final float[] texCoords = { 0.5f, 0, 0, 0, 1, 1 };
 
-			// outsource
-			pointsmatrix = new float[fDomain.size()][3 * points3d.length];
-			pointsmatrix[a - 1] = points;
-
 			// Draw Faces
 			if (drawFaces) {
 				TriangleMesh mesh = new TriangleMesh();
@@ -439,291 +389,95 @@ public class FundamentalDomain {
 				mesh.getFaces().addAll(faces);
 				mesh.getFaceSmoothingGroups().addAll(smoothing);
 				MeshView meshView = new MeshView(mesh);
-				meshView.setMesh(mesh);
+				// meshView.setMesh(mesh);
 				PhongMaterial material = new PhongMaterial(colors[a]);
 				// material.setSpecularColor(Color.YELLOW);
 				meshView.setMaterial(material);
 				group.getChildren().addAll(meshView);
 			}
 
-			// Draw Points
-			if (drawPoints) {
-				for (int i = 0; i < linepoints.length; i++) {
-					Sphere pdot = new Sphere(1);
-					pdot.setMaterial(new PhongMaterial(Color.BLACK));
-					pdot.getTransforms().add(new Translate(points3d[linepoints[i]].getX(),
-							points3d[linepoints[i]].getY(), points3d[linepoints[i]].getZ()));
-					group.getChildren().add(pdot);
+			//defines the height of line and edges above the surface
+			if (geom == Geometry.Euclidean) {
+				linesAbove = 0.01;
+			} else if (geom == Geometry.Hyperbolic) {
+				linesAbove = 0.0;
+			} else {
+				linesAbove = 0.00;
+			}
+
+			//// Draw Lines on 2-Line
+			final float[] texCoord = { 0.5f, 0, 0, 0, 1, 1 };
+			PhongMaterial linematerial = new PhongMaterial(linecolor);
+			PhongMaterial edgematerial = new PhongMaterial(edgecolor);
+
+			TriangleMesh linemesh = new TriangleMesh();
+			TriangleMesh edgemesh = new TriangleMesh();
+
+			// Draw 2-Line
+			if (drawLines) {
+
+				if (!visitLines.get(a)) {
+
+					visitLines.set(a);
+					//visitLines.set(dsymbol.getS2(a));
+
+					for (int i = 0; i < linepoints3d.length - 1; i++) {
+
+						TriangleMesh meshStorage = new TriangleMesh(); //mesh Storage
+						meshStorage = Line3D.connect(linepoints3d[i], linepoints3d[i + 1],
+								geom, linesize, linesAbove);
+
+						linemesh = combineTriangleMesh(linemesh, meshStorage); //adds mesh Storage to linemesh
+
+					}
+
+					//adds linemesh to group
+					linemesh.getTexCoords().addAll(texCoord);
+
+					MeshView lineView = new MeshView(linemesh);
+					lineView.setMaterial(linematerial);
+					group.getChildren().addAll(lineView);
+
 				}
 			}
-		}
+			// Draw Edges on 2-Line
+			if (drawEdges) {
+				if (!visitEdges.get(a)) {
+					visitEdges.set(a);
+					//visitEdges.set(dsymbol.getS2(a));
 
-		// Draw Lines
-		if (true) {
-			for (int a = 1; a <= fDomain.size(); a++) {
-				// draw lines out
-				if (drawLines) {
-					PhongMaterial linematerial = new PhongMaterial(linecolor);
-					PhongMaterial edgematerial = new PhongMaterial(lineedgecolor);
-
-					if (HyperbolicAccurateLineSize && fDomain.getGeometry() == Geometry.Hyperbolic) {
-						Point3D refPoint = fDomain.getChamberCenter3D(1).multiply(0.01);
-						Point3D origin = new Point3D(0, 0, 1);
-						double w = 0.01;
-						double h = (1 + w * w) / (1 - w * w);
-						// Length of translation
-						double t = Tools.distance(fDomain, refPoint, origin);
-						// Affine translation:
-						Affine translateT = new Affine(Math.cosh(t), Math.sinh(t), 0, Math.sinh(t), Math.cosh(t), 0); // Translation
-																														// along
-																														// x-axis
-						Point2D x = translateT.transform(0, 1);
-						Point2D y = translateT.transform((1 + h) * w, h);
-
-						linesize = 100 * (y.getX() / (1 + y.getY()) - x.getX() / (1 + x.getY()));
-						edgesize = linesize;
-					}
-
-					if (!visit.get(a)) {
-						visit.set(a);
-						//visit.set(dsymbol.getS2(a));
-						for (int i = 0; i < linepointsmatrix[a - 1].length - 1; i++) {
-							int k = linepointsmatrix[a - 1][i];
-							int j = linepointsmatrix[a - 1][i + 1];
-							if (drawLinesWithEdges) {
-								edgesize = linesize * 0.6;
-								TriangleMesh linemesh = new TriangleMesh();
-								TriangleMesh linemeshedges = new TriangleMesh();
-								linemesh = tiler.core.fundamental.tools.Line3D.connectEdges(points3dmatrix[a - 1][k],
-										points3dmatrix[a - 1][j], fDomain, linesize, 0.2, linesAbove)[0];
-								linemeshedges = tiler.core.fundamental.tools.Line3D.connectEdges(
-										points3dmatrix[a - 1][k], points3dmatrix[a - 1][j], fDomain, linesize, 0.2,
-										linesAbove)[1];
-
-								MeshView lineView = new MeshView();
-								lineView.setMesh(linemesh);
-								lineView.setMaterial(linematerial);
-
-								MeshView lineView2 = new MeshView();
-								lineView2.setMesh(linemeshedges);
-								lineView2.setMaterial(edgematerial);
-
-								group.getChildren().addAll(lineView);
-								group.getChildren().addAll(lineView2);
-							} else {
-								TriangleMesh linemesh = new TriangleMesh();
-								linemesh = tiler.core.fundamental.tools.Line3D.connect(points3dmatrix[a - 1][k],
-										points3dmatrix[a - 1][j], fDomain, linesize, linesAbove);
-
-								MeshView lineView = new MeshView();
-								lineView.setMesh(linemesh);
-								lineView.setMaterial(linematerial);
-
-								group.getChildren().addAll(lineView);
-							}
-
+					for (int i = 0; i < edgepoints3d.length; i++) {
+						Point3D direction;
+						Point3D center = edgepoints3d[i];
+						if (i == edgepoints3d.length - 1) {
+							direction = edgepoints3d[i].subtract(edgepoints3d[i - 1]);
+						} else {
+							direction = edgepoints3d[i].subtract(edgepoints3d[i + 1]);
 						}
+
+						//gets circle coordinates
+						Point3D[] coordinates = Circle3D.circle(center, direction,
+								edgesize, edgefine, geom);
+
+						//creates Triangle Mesh for circle coordinates
+						TriangleMesh meshStorage = Circle3D.CircleMesh(center, coordinates,
+								geom, linesAbove);
+						edgemesh = combineTriangleMesh(edgemesh, meshStorage);
+
 					}
+
+					//adds edgemesh to group
+					edgemesh.getTexCoords().addAll(texCoord);
+
+					MeshView edgeView = new MeshView(edgemesh);
+					edgeView.setMaterial(edgematerial);
+					group.getChildren().addAll(edgeView);
 				}
-				// handle edges
-				if (drawEdges) {
-					if (geom == Geometry.Euclidean) {
-						if (drawEucledianEdges) {
-							int[] EdgesToDraw = { 0, 5, 1 };
-							for (int i = 0; i < EdgesToDraw.length; i++) {
-								Point3D center = points3dmatrix[a - 1][EdgesToDraw[i]].add(0, 0, 1);
-								Point3D diff = new Point3D(1, 0, 0); // points3dmatrix[a-1][5].add(0,0,1).subtract(center);
-								Point3D[] coordinates = tiler.core.fundamental.tools.Circle3D.circle(center, diff,
-										edgesize, edgefine, geom);
-								TriangleMesh mesh = tiler.core.fundamental.tools.Circle3D.CircleMesh(center,
-										coordinates, geom);
-								MeshView meshView = tiler.core.fundamental.tools.Circle3D.CircleMeshView(mesh,
-										edgecolor);
-								group.getChildren().addAll(meshView);
-							}
 
-						} else if (drawEucledianEdgesSphere) {
-							int[] EdgesToDraw = {0, 5, 1};
-							for (int i = 0; i < EdgesToDraw.length; i++) {
-								Sphere pdot = new Sphere(1);
-								pdot.setMaterial(new PhongMaterial(edgecolor));
-								pdot.getTransforms().add(new Translate(points3dmatrix[a - 1][EdgesToDraw[i]].getX(),
-										points3dmatrix[a - 1][EdgesToDraw[i]].getY(), 0));
-								group.getChildren().add(pdot);
-							}
-						}
-					}
-					if (geom == Geometry.Spherical) {
-
-						if (drawSphericalEdges) {
-							int[] EdgesToDraw = { 0, 9, 16, 24,32};
-							for (int i = 0; i < EdgesToDraw.length; i++) {
-								int k;
-								int l = EdgesToDraw[i];
-								if (i == EdgesToDraw.length - 1) {
-									k = EdgesToDraw[i - 1];
-								} else {
-									k = EdgesToDraw[i + 1];
-								}
-								Point3D normalVector = getSphericalNormal(
-										points3dmatrix[a - 1][linepointsmatrix[a - 1][l]]);
-								Point3D center = points3dmatrix[a - 1][linepointsmatrix[a - 1][l]].add(normalVector.multiply(linesAbove));
-								Point3D diff = points3dmatrix[a - 1][linepointsmatrix[a - 1][k]].add(normalVector.multiply(linesAbove))
-										.subtract(center);
-								Point3D[] coordinates = tiler.core.fundamental.tools.Circle3D.circle(center, diff,
-										edgesize, edgefine, geom);
-								TriangleMesh mesh = tiler.core.fundamental.tools.Circle3D.CircleMesh(center,
-										coordinates, geom);
-								MeshView meshView = tiler.core.fundamental.tools.Circle3D.CircleMeshView(mesh,
-										edgecolor);
-								group.getChildren().addAll(meshView);
-							}
-						} else if (drawSphericalEdgesFine) {
-
-							for (int i = 0; i < linepointsmatrix[a - 1].length; i++) {
-								int k;
-								if (i == linepointsmatrix[a - 1].length - 1) {
-									k = i - 1;
-								} else {
-									k = i + 1;
-								}
-								Point3D normalVector = getSphericalNormal(
-										points3dmatrix[a - 1][linepointsmatrix[a - 1][i]]);
-								Point3D center = points3dmatrix[a - 1][linepointsmatrix[a - 1][i]].add(normalVector.multiply(linesAbove));
-								Point3D diff = points3dmatrix[a - 1][linepointsmatrix[a - 1][k]].add(normalVector.multiply(linesAbove))
-										.subtract(center);
-								Point3D[] coordinates = tiler.core.fundamental.tools.Circle3D.circle(center, diff,
-										edgesize, edgefine, geom);
-								TriangleMesh mesh = tiler.core.fundamental.tools.Circle3D.CircleMesh(center,
-										coordinates, geom);
-								MeshView meshView = tiler.core.fundamental.tools.Circle3D.CircleMeshView(mesh,
-										edgecolor);
-								group.getChildren().addAll(meshView);
-							}
-						}else if (drawSphericalEdgeSphere) {
-							int[] EdgesToDraw = { 0, 9, 16, 24,32};
-							for (int i = 0; i < EdgesToDraw.length; i++) {
-								int k=linepointsmatrix[a-1][EdgesToDraw[i]];
-							Sphere pdot = new Sphere(1);
-							pdot.setMaterial(new PhongMaterial(edgecolor));
-							pdot.getTransforms().add(new Translate(points3dmatrix[a - 1][k].getX(),
-									points3dmatrix[a - 1][k].getY(), points3dmatrix[a - 1][k].getZ()));
-							group.getChildren().add(pdot);
-							}
-
-						
-						} else if (drawSphericalEdgesFineSphere) {
-
-							for (int i = 0; i < linepointsmatrix[a - 1].length; i++) {
-								Sphere pdot = new Sphere(1);
-								pdot.setMaterial(new PhongMaterial(edgecolor));
-								pdot.getTransforms()
-										.add(new Translate(points3dmatrix[a - 1][linepointsmatrix[a - 1][i]].getX(),
-												points3dmatrix[a - 1][linepointsmatrix[a - 1][i]].getY(),
-												points3dmatrix[a - 1][linepointsmatrix[a - 1][i]].getZ()));
-								group.getChildren().add(pdot);
-							}
-						} 
-					}
-					if (geom == Geometry.Hyperbolic) {
-						if (drawHyperbolicEdgesSphereFine && geom == Geometry.Hyperbolic) {
-							for (int i = 0; i < linepointsmatrix[a - 1].length - 1; i++) {
-
-								double above = 0.5;
-								Point3D point0 = points3dmatrix[a - 1][linepointsmatrix[a - 1][i]];
-								Point3D point1 = points3dmatrix[a - 1][linepointsmatrix[a - 1][i + 1]];
-								Point3D diff = point1.subtract(point0).normalize();
-								Point3D normalToSphere = new Point3D(2 * point0.getX(), 2 * point0.getY(),
-										-2 * point0.getZ());
-								Point3D normal = diff.crossProduct(normalToSphere.normalize());
-								Point3D point2 = point0.add(normalToSphere.normalize().multiply(above));
-
-								Sphere pdot = new Sphere(1);
-								pdot.setMaterial(new PhongMaterial(edgecolor));
-								pdot.getTransforms().add(new Translate(point2.getX(), point2.getY(), point2.getZ()));
-								group.getChildren().add(pdot);
-							}
-						} else if (drawHyperbolicEdgesFine && geom == Geometry.Hyperbolic) {
-							for (int i = 0; i < linepointsmatrix[a - 1].length; i++) {
-								int k;
-								if (i == linepointsmatrix[a - 1].length - 1) {
-									k = i - 1;
-								} else {
-									k = i + 1;
-								}
-								Point3D normalVector = getHyperbolicNormal(
-										points3dmatrix[a - 1][linepointsmatrix[a - 1][i]]);
-								Point3D center = points3dmatrix[a - 1][linepointsmatrix[a - 1][i]].add(normalVector);
-								Point3D diff = points3dmatrix[a - 1][linepointsmatrix[a - 1][k]].add(normalVector)
-										.subtract(center);
-								Point3D[] coordinates = tiler.core.fundamental.tools.Circle3D.circle(center, diff,
-										edgesize, edgefine, geom);
-								TriangleMesh mesh = tiler.core.fundamental.tools.Circle3D.CircleMesh(center,
-										coordinates, geom);
-								MeshView meshView = tiler.core.fundamental.tools.Circle3D.CircleMeshView(mesh,
-										edgecolor);
-								group.getChildren().addAll(meshView);
-							}
-
-						}
-						if (drawHyperbolicEdges && geom == Geometry.Hyperbolic) {
-							Point3D normalVector = getHyperbolicNormal(
-									points3dmatrix[a - 1][linepointsmatrix[a - 1][0]]);
-							Point3D normalVector2 = getHyperbolicNormal(
-									points3dmatrix[a - 1][linepointsmatrix[a - 1][5]]);
-							Point3D normalVector3 = getHyperbolicNormal(
-									points3dmatrix[a - 1][linepointsmatrix[a - 1][1]]);
-
-							Point3D center = points3dmatrix[a - 1][0].add(normalVector);
-							Point3D diff = points3dmatrix[a - 1][5].add(normalVector).subtract(center);
-							Point3D[] coordinates = tiler.core.fundamental.tools.Circle3D.circle(center, diff, edgesize,
-									edgefine, geom);
-							TriangleMesh mesh = tiler.core.fundamental.tools.Circle3D.CircleMesh(center, coordinates,
-									geom);
-							MeshView meshView = tiler.core.fundamental.tools.Circle3D.CircleMeshView(mesh, edgecolor);
-							group.getChildren().addAll(meshView);
-							////////////
-							Point3D center2 = points3dmatrix[a - 1][5].add(normalVector3);
-							Point3D diff2 = points3dmatrix[a - 1][1].add(normalVector3).subtract(center2);
-							Point3D[] coordinates2 = tiler.core.fundamental.tools.Circle3D.circle(center2, diff2,
-									edgesize, edgefine, geom);
-							TriangleMesh mesh2 = tiler.core.fundamental.tools.Circle3D.CircleMesh(center2, coordinates2,
-									geom);
-							MeshView meshView2 = tiler.core.fundamental.tools.Circle3D.CircleMeshView(mesh2, edgecolor);
-							group.getChildren().addAll(meshView2);
-							////////////
-							Point3D center3 = points3dmatrix[a - 1][1].add(normalVector2);
-							Point3D diff3 = points3dmatrix[a - 1][5].add(normalVector2).subtract(center3);
-							Point3D[] coordinates3 = tiler.core.fundamental.tools.Circle3D.circle(center3, diff3,
-									edgesize, edgefine, geom);
-							TriangleMesh mesh3 = tiler.core.fundamental.tools.Circle3D.CircleMesh(center3, coordinates3,
-									geom);
-							MeshView meshView3 = tiler.core.fundamental.tools.Circle3D.CircleMeshView(mesh3, edgecolor);
-							group.getChildren().addAll(meshView3);
-
-						} else if (drawHyperbolicEdgesSphere && geom == Geometry.Hyperbolic) {
-							Sphere pdot = new Sphere(1);
-							pdot.setMaterial(new PhongMaterial(edgecolor));
-							pdot.getTransforms().add(new Translate(points3dmatrix[a - 1][0].getX(),
-									points3dmatrix[a - 1][0].getY(), points3dmatrix[a - 1][0].getZ()));
-							group.getChildren().add(pdot);
-
-							Sphere pdot2 = new Sphere(1);
-							pdot2.setMaterial(new PhongMaterial(edgecolor));
-							pdot2.getTransforms().add(new Translate(points3dmatrix[a - 1][1].getX(),
-									points3dmatrix[a - 1][1].getY(), points3dmatrix[a - 1][1].getZ()));
-							group.getChildren().add(pdot2);
-
-							Sphere pdot3 = new Sphere(1);
-							pdot3.setMaterial(new PhongMaterial(edgecolor));
-							pdot3.getTransforms().add(new Translate(points3dmatrix[a - 1][5].getX(),
-									points3dmatrix[a - 1][5].getY(), points3dmatrix[a - 1][5].getZ()));
-							group.getChildren().add(pdot3);
-
-						}
-					}
-				}
 			}
+			
+
+
 		}
 
 		// Add lines
@@ -943,31 +697,53 @@ public class FundamentalDomain {
 				+ (a0.getX() - a2.getX()) * (a0.getY() + a2.getY());
 	}
 
-	public static double getLong(Point3D a) {
-		return Math.atan2(a.getY(), a.getX());
-	}
 
-	public static double getLang(Point3D a, double radius) {
-		return Math.asin(a.getZ() / radius);
-	}
 
-	public static double sphericalDistance(Point3D a, Point3D b, double radius) {
-		return radius * Math.acos(a.normalize().dotProduct(b.normalize()));
-	}
 
-	public static double[][] sort2DArrayBasedOnSecondColumn(double[][] array) {
-		Arrays.sort(array, Comparator.comparingDouble(arr -> arr[1]));
-		return array;
-	}
+	
+	/**
+	 * combines two Triangle Meshes by Cornelius 21.11.18
+	 * 
+	 * @param mesh1
+	 * @param mesh2
+	 * @return combined mesh of mesh1 and mesh2
+	 */
+	public static TriangleMesh combineTriangleMesh(TriangleMesh mesh1, TriangleMesh mesh2) {
 
-	public static Point3D getSphericalNormal(Point3D point) {
-		Point3D p = new Point3D(2 * point.getX(), 2 * point.getY(), 2 * point.getZ()).normalize();
-		return p;
-	}
+		TriangleMesh newMesh = new TriangleMesh(); //mesh that is returned later
+		int mesh1pointsize = mesh1.getPoints().size(); //number of points of mesh1
+		int mesh1facesize = mesh1.getFaces().size(); //number of faces of mesh1
+		int facesize = mesh1facesize + mesh2.getFaces().size();//number of faces for new mesh
 
-	public static Point3D getHyperbolicNormal(Point3D point) {
-		Point3D p = new Point3D(2 * point.getX(), 2 * point.getY(), -2 * point.getZ()).normalize();
-		return p;
+		//recalculates which points belong to which face
+		int[] faces = new int[facesize];
+		//no changes for faces of mesh1
+		for (int i = 0; i < mesh1facesize; i++) {
+			faces[i] = mesh1.getFaces().get(i);
+		}
+		//changes for mesh2
+		for (int i = mesh1facesize; i < facesize; i = i + 6) {
+
+			faces[i] = mesh2.getFaces().get(i - mesh1facesize) + (mesh1pointsize / 3);
+			faces[i + 1] = 0;
+			faces[i + 2] = mesh2.getFaces().get(i + 2 - mesh1facesize) + (mesh1pointsize / 3);
+			faces[i + 3] = 1;
+			faces[i + 4] = mesh2.getFaces().get(i + 4 - mesh1facesize) + (mesh1pointsize / 3);
+			faces[i + 5] = 2;
+
+		}
+
+		//points can be added easily
+		newMesh.getPoints().addAll(mesh1.getPoints());
+		newMesh.getPoints().addAll(mesh2.getPoints());
+
+		//handles smoothing groups of mesh
+		newMesh.getFaceSmoothingGroups().addAll(mesh1.getFaceSmoothingGroups());
+		newMesh.getFaceSmoothingGroups().addAll(mesh2.getFaceSmoothingGroups());
+		newMesh.getFaces().addAll(faces);
+
+		return newMesh;
+
 	}
 
 }
